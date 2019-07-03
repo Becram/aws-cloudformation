@@ -1,0 +1,581 @@
+Description: Provisions a simple cluster with a web and a database server
+
+Parameters:
+  KeyPairName:
+    Type: String
+    Description: Name of keypair used when provisioning instances
+  InstanceType:
+    Type: String
+    Description: Instance type to provision
+    Default: t2.micro
+  ImageId:
+    Type: String
+    Description: Image to use when provisioning instances
+    Default: ami-0986c2ac728528ac2 # Amazon Linux 2
+  RootDevice:
+    Type: String
+    Description: Name of the root device on provisioned instances
+    Default: xvda  # varies based on Linux type (Ubunut /dev/sda1)
+  RootFsType:
+    Type: String
+    Description: File system type for root device
+    Default: xfs
+  VolumeSize:
+    Type: Number
+    Description: Size of the volume in GB
+    Default: 8
+
+Resources:
+  TutorialVPC:                   # name of the resource
+    Type: AWS::EC2::VPC          # type of resource
+    Properties:                  # properties of the resource
+      CidrBlock: "10.6.0.0/24"
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: "Name"
+          Value: "Tutorial VPC"
+
+  TutorialInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: "Name"
+          Value: "Internet Gateway"
+
+  TutorialVPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref TutorialVPC
+      InternetGatewayId: !Ref TutorialInternetGateway
+
+  TutorialPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref TutorialVPC
+      CidrBlock: "10.6.0.0/25"
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: "Name"
+          Value: "Public Subnet"
+  TutorialPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref TutorialVPC
+      CidrBlock: "10.6.0.128/25"
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: "Name"
+          Value: "Private Subnet"
+  TutorialPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref TutorialVPC
+      Tags:
+        - Key: "Name"
+          Value: "Public Internet Route Table"
+
+  TutorialPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref TutorialVPC
+      Tags:
+        - Key: "Name"
+          Value: "Private Route Table"
+
+  TutorialInternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: TutorialVPCGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref TutorialInternetGateway
+      RouteTableId: !Ref TutorialPublicRouteTable
+
+  TutorialPublicSubnetPublicRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref TutorialPublicRouteTable
+      SubnetId: !Ref TutorialPublicSubnet
+
+
+  TutorialNatGatewaySubnetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref TutorialVPC
+      Tags:
+        - Key: "Name"
+          Value: "NAT Gateway Subnet Route Table"
+  TutorialNatGatewayInternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: TutorialVPCGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref TutorialInternetGateway
+      RouteTableId: !Ref TutorialNatGatewaySubnetRouteTable
+
+  TutorialNatGatewayElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  TutorialNatGateway:
+    Type: AWS::EC2::NatGateway
+    DependsOn: TutorialVPCGatewayAttachment
+    Properties:
+      AllocationId: !Sub ${TutorialNatGatewayElasticIP.AllocationId}
+      SubnetId: !Ref TutorialPublicSubnet
+      Tags:
+        - Key: "Name"
+          Value: "NAT Gateway"
+
+  TutorialPrivateSubnetNatRoute:
+    Type: AWS::EC2::Route
+    DependsOn: TutorialNatGateway
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref TutorialNatGateway
+      RouteTableId: !Ref TutorialPrivateRouteTable
+  TutorialPublicSubnetRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref TutorialPublicRouteTable
+      SubnetId: !Ref TutorialPublicSubnet
+
+  TutorialPrivateSubnetRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref TutorialPrivateRouteTable
+      SubnetId: !Ref TutorialPrivateSubnet
+
+  TutorialPublicSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Description: "Web Server Security Group"
+    Properties:
+      VpcId: !Ref TutorialVPC
+      GroupDescription: Web Server Security Group
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0         # Public Internet
+          IpProtocol: tcp
+          FromPort: 80              # HTTP 
+          ToPort: 80
+        - CidrIp: 0.0.0.0/0         # Public Internet
+          IpProtocol: tcp
+          FromPort: 443             # HTTPS
+          ToPort: 443
+        - CidrIp: 0.0.0.0/0         # Replace with your IP Range
+          IpProtocol: tcp
+          FromPort: 22              # SSH
+          ToPort: 22
+        - CidrIp: 10.6.0.0/24       # Inside the VPC
+          IpProtocol: -1            # All traffic
+      Tags:
+        - Key: "Name"
+          Value: "Public Subnet"
+
+  TutorialPrivateSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Description: "Private Security Group"
+    Properties:
+      VpcId: !Ref TutorialVPC
+      GroupDescription: Private Subnet Security Group
+      SecurityGroupIngress:
+        - CidrIp: 10.6.0.0/24       # Inside the VPC
+          IpProtocol: -1            # All traffic
+      SecurityGroupEgress:
+        - CidrIp: 10.6.0.0/24       # Inside the VPC
+          IpProtocol: -1            # All traffic
+        - CidrIp: 0.0.0.0/0         # Public Internet
+          IpProtocol: tcp
+          FromPort: '80'            # HTTP
+          ToPort: '80'
+        - CidrIp: 0.0.0.0/0         # Public Internet
+          IpProtocol: tcp
+          FromPort: '443'           # HTTPS
+          ToPort: '443'
+      Tags:
+        - Key: "Name"
+          Value: "Private Subnet"
+
+  TutorialBackupS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: Private
+      Tags:
+        - Key: "Name"
+          Value: "Backup Bucket"
+
+  TutorialAdminGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      Policies:
+        - PolicyName: TutorialAdminPolicy
+          PolicyDocument:
+            Statement:
+            - Effect: Allow
+              Action:
+                - s3:ListBucket
+                - s3:ListBucketByTags
+                - s3:ListBucketMultipartUploads
+                - s3:ListBucketVersions
+              Resource: !Sub ${TutorialBackupS3Bucket.Arn}
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:DeleteObject
+                - s3:GetObject
+              Resource: !Sub ${TutorialBackupS3Bucket.Arn}/*
+
+  TutorialInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+        - arn:aws-us-gov:iam::aws:policy/CloudWatchAgentServerPolicy
+        - arn:aws-us-gov:iam::aws:policy/service-role/AmazonEC2RoleforSSM
+        - arn:aws-us-gov:iam::aws:policy/AmazonSSMReadOnlyAccess
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+
+  TutorialInstanceRolePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: TutorialInstanceRolePolicy
+      Roles:
+        - Ref: TutorialInstanceRole
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:ListBucket
+              - s3:ListBucketByTags
+              - s3:ListBucketMultipartUploads
+              - s3:ListBucketVersions
+            Resource: !Sub ${TutorialBackupS3Bucket.Arn}
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:GetObject
+            Resource: !Sub ${TutorialBackupS3Bucket.Arn}/*
+
+  TutorialInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref TutorialInstanceRole
+
+  TutorialBootLog:
+    Type: AWS::Logs::LogGroup
+
+  TutorialKernelLog:
+    Type: AWS::Logs::LogGroup
+
+  #
+  # Instances
+  #
+  TutorialDatabaseServer:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          files:
+            /etc/profile.d/cloudformation-init.sh:
+              content: !Sub |
+                export BACKUP_S3_BUCKET="${TutorialBackupS3Bucket}"
+            /etc/amazon/amazon-cloudwatch-agent.json:
+              content: !Sub |
+                {
+                  "metrics": {
+                    "append_dimensions": {
+                      "AutoScalingGroupName": "${!aws:AutoScalingGroupName}",
+                      "ImageId": "${!aws:ImageId}",
+                      "InstanceId": "${!aws:InstanceId}",
+                      "InstanceType": "${!aws:InstanceType}"
+                    },
+                    "metrics_collected": {
+                      "cpu": {
+                        "measurement": [
+                          "cpu_usage_idle",
+                          "cpu_usage_iowait",
+                          "cpu_usage_user",
+                          "cpu_usage_system"
+                        ],
+                        "metrics_collection_interval": 30,
+                        "totalcpu": false
+                      },
+                      "disk": {
+                        "measurement": [
+                          "used_percent",
+                          "inodes_free"
+                        ],
+                        "metrics_collection_interval": 30,
+                        "resources": [
+                          "*"
+                        ]
+                      },
+                      "diskio": {
+                        "measurement": [
+                          "io_time"
+                        ],
+                        "metrics_collection_interval": 30,
+                        "resources": [
+                          "*"
+                        ]
+                      },
+                      "mem": {
+                        "measurement": [
+                          "mem_used_percent"
+                        ],
+                        "metrics_collection_interval": 30
+                      },
+                      "statsd": {
+                        "metrics_aggregation_interval": 30,
+                        "metrics_collection_interval": 10,
+                        "service_address": ":8125"
+                      },
+                      "swap": {
+                        "measurement": [
+                          "swap_used_percent"
+                        ],
+                        "metrics_collection_interval": 30
+                      }
+                    }
+                  },
+                  "logs": {
+                    "logs_collected": {
+                      "files": {
+                        "collect_list": [
+                          {
+                            "log_group_name": "${TutorialBootLog}",
+                            "file_path": "/var/log/boot.log"
+                          },
+                          {
+                            "log_group_name": "${TutorialKernelLog}",
+                            "file_path": "/var/log/messages"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      NetworkInterfaces:
+        - SubnetId: !Ref TutorialPrivateSubnet
+          DeviceIndex: 0
+          GroupSet:
+            - !Ref TutorialPrivateSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: !Sub "/dev/${RootDevice}"
+          Ebs:
+            VolumeSize: !Ref VolumeSize
+            VolumeType: gp2
+      IamInstanceProfile: !Ref TutorialInstanceProfile
+      Tags:
+        - Key: "Name"
+          Value: "Tutorial Database Server"
+      UserData: 
+        Fn::Base64: 
+          !Sub |
+            #!/bin/bash -xe
+
+            # cloudformation initialize
+            /opt/aws/bin/cfn-init -v -s ${AWS::StackName} --region ${AWS::Region} -r TutorialDatabaseServer
+
+            # download and install cloudwatch agent
+            wget https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm
+            yum -y install amazon-cloudwatch-agent.rpm
+            mv /etc/amazon/amazon-cloudwatch-agent.json /etc/amazon/amazon-cloudwatch-agent/amazon-cloudwatch-agent.json
+            sudo systemctl enable amazon-cloudwatch-agent
+            sudo systemctl start amazon-cloudwatch-agent
+
+
+  TutorialWebServer:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          files:
+            /etc/profile.d/cloudformation-init.sh:
+              content: !Sub |
+                export BACKUP_S3_BUCKET="${TutorialBackupS3Bucket}"
+                export DATABASE_SERVER="${TutorialDatabaseServer.PrivateIp}"
+            /etc/amazon/amazon-cloudwatch-agent.json:
+              content: !Sub |
+                {
+                  "metrics": {
+                    "append_dimensions": {
+                      "AutoScalingGroupName": "${!aws:AutoScalingGroupName}",
+                      "ImageId": "${!aws:ImageId}",
+                      "InstanceId": "${!aws:InstanceId}",
+                      "InstanceType": "${!aws:InstanceType}"
+                    },
+                    "metrics_collected": {
+                      "cpu": {
+                        "measurement": [
+                          "cpu_usage_idle",
+                          "cpu_usage_iowait",
+                          "cpu_usage_user",
+                          "cpu_usage_system"
+                        ],
+                        "metrics_collection_interval": 30,
+                        "totalcpu": false
+                      },
+                      "disk": {
+                        "measurement": [
+                          "used_percent",
+                          "inodes_free"
+                        ],
+                        "metrics_collection_interval": 30,
+                        "resources": [
+                          "*"
+                        ]
+                      },
+                      "diskio": {
+                        "measurement": [
+                          "io_time"
+                        ],
+                        "metrics_collection_interval": 30,
+                        "resources": [
+                          "*"
+                        ]
+                      },
+                      "mem": {
+                        "measurement": [
+                          "mem_used_percent"
+                        ],
+                        "metrics_collection_interval": 30
+                      },
+                      "statsd": {
+                        "metrics_aggregation_interval": 30,
+                        "metrics_collection_interval": 10,
+                        "service_address": ":8125"
+                      },
+                      "swap": {
+                        "measurement": [
+                          "swap_used_percent"
+                        ],
+                        "metrics_collection_interval": 30
+                      }
+                    }
+                  },
+                  "logs": {
+                    "logs_collected": {
+                      "files": {
+                        "collect_list": [
+                          {
+                            "log_group_name": "${TutorialBootLog}",
+                            "file_path": "/var/log/boot.log"
+                          },
+                          {
+                            "log_group_name": "${TutorialKernelLog}",
+                            "file_path": "/var/log/messages"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      NetworkInterfaces:
+        - SubnetId: !Ref TutorialPublicSubnet
+          DeviceIndex: 0
+          GroupSet:
+            - !Ref TutorialPublicSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: !Sub "/dev/${RootDevice}"
+          Ebs:
+            VolumeSize: !Ref VolumeSize
+            VolumeType: gp2
+      IamInstanceProfile: !Ref TutorialInstanceProfile
+      Tags:
+        - Key: "Name"
+          Value: "Tutorial Web Server"
+      UserData: 
+        Fn::Base64: 
+          !Sub |
+            #!/bin/bash -xe
+
+            # # cloudformation initialize
+            # /opt/aws/bin/cfn-init -v -s ${AWS::StackName} --region ${AWS::Region} -r TutorialWebServer
+
+            # # download and install cloudwatch agent
+            wget https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+            dpkg -i amazon-cloudwatch-agent.deb
+            mv /etc/amazon/amazon-cloudwatch-agent.json /etc/amazon/amazon-cloudwatch-agent/amazon-cloudwatch-agent.json
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+            systemctl restart amazon-cloudwatch-agent
+            systemctl enable amazon-cloudwatch-agent.service
+            systemctl start amazon-cloudwatch-agent.service
+            # sudo systemctl enable amazon-cloudwatch-agent
+            # sudo systemctl start amazon-cloudwatch-agent
+            # sudo yum update -y
+            # sudo yum install -y httpd
+            # sudo  systemctl enable httpd.service 
+            # sudo systemctl start httpd.service
+
+
+  #
+  # Topic for monitoring alarms
+  #
+  # Subscriptions may be created through the SNS console (i.e. email, SMS, etc.)
+  #
+  TutorialAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: TutorialAlarms
+
+  #
+  # Alarms
+  #
+  TutorialDatabaseCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Database Server CPU Usage High
+      AlarmActions:
+        - !Ref TutorialAlarmTopic
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 89
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref TutorialDatabaseServer
+
+  TutorialDatabaseDiskAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Database Server Disk Usage High
+      AlarmActions:
+        - !Ref TutorialAlarmTopic
+      MetricName: disk_used_percent
+      Namespace: CWAgent
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 89
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref TutorialDatabaseServer
+        - Name: ImageId
+          Value: !Ref ImageId
+        - Name: InstanceType
+          Value: !Ref InstanceType
+        - Name: path
+          Value: /
+        - Name: device
+          Value: !Sub ${RootDevice}1
+        - Name: fstype
+          Value: !Ref RootFsType
